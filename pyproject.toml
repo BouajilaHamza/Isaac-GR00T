@@ -60,6 +60,8 @@ dependencies = [
     "tyro",
     "pytest",
     "peft",
+    "huggingface-hub>=0.30.2",
+    "tree>=0.2.4",
 ]
 
 [project.optional-dependencies]
