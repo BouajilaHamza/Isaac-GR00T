@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import json
+import warnings
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -183,6 +184,122 @@ class Gr00tPolicy(BasePolicy):
             unnormalized_action = squeeze_dict_values(unnormalized_action)
         return unnormalized_action
 
+    def to_onnx(
+        self,
+        output_path: str,
+        example_normalized_input: Dict[str, torch.Tensor],
+        opset_version: int = 17, # Common opset, might need adjustment
+        verbose: bool = False,
+        **kwargs,
+    ):
+        """
+        Exports the core Gr00t model to ONNX format.
+
+        IMPORTANT: This method exports ONLY the underlying torch.nn.Module (`self.model`).
+        The preprocessing (`apply_transforms`) and postprocessing (`unapply_transforms`)
+        steps are NOT included in the exported ONNX graph. You must reimplement
+        these steps in your deployment environment.
+
+        Args:
+            output_path (str): Path to save the exported ONNX model file.
+            example_normalized_input (Dict[str, torch.Tensor]): A dictionary containing example
+                input tensors *after* applying `apply_transforms`. All tensors must be
+                on the same device as the model (`self.device`). The batch size of the
+                example input will determine the fixed batch size in the ONNX graph
+                unless dynamic axes are specified.
+            opset_version (int): The ONNX opset version to use for export.
+            verbose (bool): If True, prints detailed ONNX export information.
+            **kwargs: Additional keyword arguments passed directly to `torch.onnx.export`.
+                      Useful for specifying `dynamic_axes`, `input_names`, `output_names`, etc.
+
+        Example Usage:
+
+        .. code-block:: python
+
+            # Assume 'policy' is an initialized Gr00tPolicy instance
+            # Assume 'observations' is a sample observation dictionary (unnormalized)
+
+            # 1. Prepare normalized example input (MUST match model's device)
+            if not policy._check_state_is_batched(observations):
+                 observations = unsqueeze_dict_values(observations) # Add batch dim if needed
+            normalized_input = policy.apply_transforms(observations)
+            # Ensure tensors are on the correct device
+            normalized_input_device = {
+                k: v.to(policy.device) if isinstance(v, torch.Tensor) else v
+                for k, v in normalized_input.items()
+            }
+
+            # 2. Define input/output names (match keys in normalized_input and model output)
+            input_names = list(normalized_input_device.keys())
+            # Assuming model.get_action returns {'action_pred': tensor}
+            output_names = ["action_pred"]
+
+            # 3. Define dynamic axes (optional, allows variable batch size)
+            dynamic_axes = {name: {0: 'batch_size'} for name in input_names}
+            dynamic_axes[output_names[0]] = {0: 'batch_size'}
+
+            # 4. Export
+            policy.to_onnx(
+                "gr00t_model.onnx",
+                normalized_input_device,
+                input_names=input_names,
+                output_names=output_names,
+                dynamic_axes=dynamic_axes,
+                verbose=True
+            )
+            print("ONNX export complete. Remember to handle pre/post-processing separately!")
+
+        """
+        # Ensure model is in eval mode
+        self.model.eval()
+
+        # Check if example input tensors are on the correct device
+        for key, tensor in example_normalized_input.items():
+            if isinstance(tensor, torch.Tensor) and tensor.device != self.model.device:
+                warnings.warn(
+                    f"Input tensor '{key}' is on device {tensor.device} but model is on {self.model.device}. "
+                    f"Moving tensor to {self.model.device} for export. Ensure future inputs match this device.",
+                    UserWarning
+                )
+                example_normalized_input[key] = tensor.to(self.model.device)
+
+        # Default input/output names if not provided in kwargs
+        if "input_names" not in kwargs:
+            kwargs["input_names"] = list(example_normalized_input.keys())
+            print(f"Using default input names: {kwargs['input_names']}")
+        if "output_names" not in kwargs:
+            # Assuming the model's get_action primarily returns 'action_pred'
+            # This might need adjustment based on the actual GR00T_N1 implementation
+            kwargs["output_names"] = ["action_pred"]
+            print(f"Using default output names: {kwargs['output_names']}")
+
+        print(f"Starting ONNX export to {output_path} with opset {opset_version}...")
+        print("IMPORTANT: Preprocessing (normalization) and Postprocessing (denormalization) are NOT included.")
+
+        try:
+            # We attempt to export the `get_action` method directly.
+            # This might require specific model structure or ONNX opset support.
+            # If this fails, exporting `self.model.forward` might be an alternative,
+            # depending on how `get_action` uses `forward`.
+            torch.onnx.export(
+                self.model, # Export the underlying nn.Module
+                (example_normalized_input,), # Input needs to be a tuple/args for export
+                output_path,
+                opset_version=opset_version,
+                verbose=verbose,
+                **kwargs,
+            )
+            print(f"ONNX model successfully exported to {output_path}")
+        except Exception as e:
+            print(f"ONNX export failed: {e}")
+            print("Troubleshooting tips:")
+            print("- Check if the `example_normalized_input` structure and dtypes exactly match what `self.model.get_action` expects.")
+            print("- Try a different `opset_version` (e.g., 14, 16).")
+            print("- Ensure all operations within `self.model.get_action` are supported by the chosen ONNX opset.")
+            print("- Check the `dynamic_axes` definitions if used.")
+            print("- Consider exporting `self.model.forward` instead if `get_action` has complex logic unsuitable for tracing.")
+            raise # Re-raise the exception
+
     def _get_action_from_normalized_input(self, normalized_input: Dict[str, Any]) -> torch.Tensor:
         # Set up autocast context if needed
         with torch.inference_mode(), torch.autocast(device_type="cuda", dtype=COMPUTE_DTYPE):
@@ -245,7 +362,6 @@ class Gr00tPolicy(BasePolicy):
         print(f"model moved to device {self.device}")
 
         self.model = model
-
     def _load_metadata(self, exp_cfg_dir: Path):
         """Load the transforms for the model."""
         # Load metadata for normalization stats
