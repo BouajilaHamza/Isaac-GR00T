@@ -58,6 +58,10 @@ class GR00T_N1Config(PretrainedConfig):
             setattr(self, key, value)
 
 
+
+
+
+
 # real model
 class GR00T_N1(PreTrainedModel):
     supports_gradient_checkpointing = True
@@ -213,6 +217,7 @@ class GR00T_N1(PreTrainedModel):
             attn_implementation (str): Preferred attention implementation.
                 - "auto": Tries "flash_attention_2" if GPU and flash_attn are available, otherwise "eager".
                 - "flash_attention_2": Attempts to use Flash Attention 2. Requires compatible GPU and installation.
+                - "sdpa": Uses the SDPA attention implementation (requires specific setup).
                 - "eager": Uses the default PyTorch attention implementation (CPU/GPU compatible).
             **kwargs: Additional arguments passed to PreTrainedModel.from_pretrained.
         """
@@ -235,6 +240,8 @@ class GR00T_N1(PreTrainedModel):
                 final_attn_impl = "eager"
         elif attn_implementation == "eager":
             final_attn_impl = "eager"  # User explicitly requested
+        elif attn_implementation == "sdpa":
+            final_attn_impl = "sdpa"  # User explicitly requested
         else:
             print(
                 f"Warning: Unknown attn_implementation '{attn_implementation}', defaulting to 'eager'."
