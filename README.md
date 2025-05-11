@@ -9,7 +9,7 @@
     <a href="https://developer.nvidia.com/isaac/gr00t"><strong>Website</strong></a> | 
     <a href="https://huggingface.co/nvidia/GR00T-N1-2B"><strong>Model</strong></a> |
     <a href="https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim"><strong>Dataset</strong></a> |
-    <a href="https://research.nvidia.com/publication/2025-03_nvidia-isaac-gr00t-n1-open-foundation-model-humanoid-robots"><strong>Paper</strong></a>
+    <a href="https://arxiv.org/abs/2503.14734"><strong>Paper</strong></a>
   </p>
 </div>
 
@@ -62,7 +62,7 @@ The focus is on enabling customization of robot behaviors through finetuning.
 
 ## Prerequisites
 - We have tested the code on Ubuntu 20.04 and 22.04, GPU: H100, L40, RTX 4090 and A6000 for finetuning and Python==3.10, CUDA version 12.4.
-- For inference, we have tested on Ubuntu 20.04 and 22.04, GPU: RTX 4090 and A6000
+- For inference, we have tested on Ubuntu 20.04 and 22.04, GPU: RTX 3090, RTX 4090 and A6000
 - If you haven't installed CUDA 12.4, please follow the instructions [here](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/) to install it.
 - Please make sure you have the following dependencies installed in your system: `ffmpeg`, `libsm6`, `libxext6`
 
@@ -181,6 +181,9 @@ python scripts/gr00t_finetune.py --help
 
 # then run the script
 python scripts/gr00t_finetune.py --dataset-path ./demo_data/robot_sim.PickNPlace --num-gpus 1
+
+# run using Lora Parameter Eifficient Fine-Tuning
+python scripts/gr00t_finetune.py  --dataset-path ./demo_data/robot_sim.PickNPlace --num-gpus 1 --lora_rank 64  --lora_alpha 128  --batch-size 32
 ```
 
 You can also download a sample dataset from our huggingface sim data release [here](https://huggingface.co/datasets/nvidia/PhysicalAI-Robotics-GR00T-X-Embodiment-Sim)
@@ -196,32 +199,40 @@ The recommended finetuning configurations is to boost your batch size to the max
 
 *Hardware Performance Considerations*
 - **Finetuning Performance**: We used 1 H100 node or L40 node for optimal finetuning. Other hardware configurations (e.g. A6000, RTX 4090) will also work but may take longer to converge. The exact batch size is dependent on the hardware, and on which component of the model is being tuned.
+- **LoRA finetuning**: We used 2 A6000 GPUs or 2 RTX 4090 GPUs for LoRA finetuning. User can try out different configurations for effective finetuning.
 - **Inference Performance**: For real-time inference, most modern GPUs perform similarly when processing a single sample. Our benchmarks show minimal difference between L40 and RTX 4090 for inference speed.
 
 For new embodiment finetuning, checkout our notebook in [`getting_started/3_new_embodiment_finetuning.ipynb`](getting_started/3_new_embodiment_finetuning.ipynb).
 
 ## 4. Evaluation
 
-To conduct an offline evaluation of the model, we provide a script that evaluates the model on a dataset, and plots it out.
+To conduct an offline evaluation of the model, we provide a script that evaluates the model on a dataset, and plots it out. Quick try: `python scripts/eval_policy.py --plot --model_path nvidia/GR00T-N1-2B`
+
+Or you can run the newly trained model in client-server mode.
 
 Run the newly trained model
 ```bash
 python scripts/inference_service.py --server \
     --model_path <MODEL_PATH> \
     --embodiment_tag new_embodiment
+    --data_config <DATA_CONFIG>
 ```
 
 Run the offline evaluation script
 ```bash
 python scripts/eval_policy.py --plot \
     --dataset_path <DATASET_PATH> \
-    --embodiment_tag new_embodiment
+    --embodiment_tag new_embodiment \
+    --data_config <DATA_CONFIG>
 ```
 
 You will then see a plot of Ground Truth vs Predicted actions, along with unnormed MSE of the actions. This would give you an indication if the policy is performing well on the dataset.
 
 
 # FAQ
+
+*Does it work on CUDA ARM Linux?*
+- Yes, visit [jetson-containers](https://github.com/dusty-nv/jetson-containers/tree/master/packages/robots/Isaac-GR00T). 
 
 *I have my own data, what should I do next for finetuning?*
 - This repo assumes that your data is already organized according to the LeRobot format. 
