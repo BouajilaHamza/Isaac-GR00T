@@ -411,6 +411,63 @@ class Gr00tPolicy(BasePolicy):
             ), f"{delta_indices=}"
             # And the step is positive
             assert (delta_indices[1] - delta_indices[0]) > 0, f"{delta_indices=}"
+    
+    def export_to_onnx(self, onnx_path: str, example_obs: Dict[str, Any], opset_version: int = 17):
+        """
+        Export the full policy (including transforms) to ONNX.
+        Args:
+            onnx_path (str): Path to save the ONNX file.
+            example_obs (Dict[str, Any]): Example raw observation (unnormalized, as would be passed to get_action).
+            opset_version (int): ONNX opset version.
+        """
+
+        class PolicyONNXWrapper(torch.nn.Module):
+            def __init__(self, policy):
+                super().__init__()
+                self.policy = policy
+
+            def forward(self, **inputs):
+                obs = {k: v for k, v in inputs.items()}
+                obs = self.policy.apply_transforms(obs)
+                action = self.policy.model.get_action(obs)["action_pred"].float()
+                return action
+
+        self.model.eval()
+        wrapper = PolicyONNXWrapper(self)
+        input_tensors = {k: torch.from_numpy(v) if isinstance(v, np.ndarray) else v for k, v in example_obs.items()}
+        input_names = list(input_tensors.keys())
+        output_names = ["action_pred"]
+        dynamic_axes = {k: {0: "batch"} for k in input_names}
+        dynamic_axes["action_pred"] = {0: "batch"}
+
+        torch.onnx.export(
+            wrapper,
+            input_tensors,
+            onnx_path,
+            input_names=input_names,
+            output_names=output_names,
+            dynamic_axes=dynamic_axes,
+            opset_version=opset_version,
+        )
+        print(f"Exported full policy (with transforms) to ONNX at {onnx_path}")
+
+    def inference_onnx(self, onnx_path: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Run inference using ONNX Runtime (CPU) on the exported ONNX model.
+        Args:
+            onnx_path (str): Path to the ONNX file.
+            input_data (Dict[str, Any]): Input data for inference (unnormalized, as would be passed to get_action).
+        Returns:
+            Dict[str, Any]: The predicted action.
+        """
+        import numpy as np
+        import onnxruntime as ort
+
+        ort_inputs = {k: v if isinstance(v, np.ndarray) else v.cpu().numpy() for k, v in input_data.items()}
+        session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+        outputs = session.run(None, ort_inputs)
+        return {"action": outputs[0]}
+
 
 
 #######################################################################################################
